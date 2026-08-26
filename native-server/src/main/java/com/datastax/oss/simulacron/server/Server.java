@@ -643,6 +643,12 @@ public final class Server implements AutoCloseable {
   public static class Builder {
     private AddressResolver addressResolver = AddressResolver.defaultResolver;
 
+    // The resolver most recently set via withAddressResolver(...), if any. Tracked separately
+    // from addressResolver so that withMultipleNodesPerIp(false) can restore it (or fall back to
+    // the true default when the caller never set one) instead of leaving behind whatever resolver
+    // withMultipleNodesPerIp(true) had installed.
+    private AddressResolver explicitAddressResolver = null;
+
     private static final long DEFAULT_BIND_TIMEOUT_IN_NANOS =
         TimeUnit.NANOSECONDS.convert(10, TimeUnit.SECONDS);
 
@@ -686,6 +692,7 @@ public final class Server implements AutoCloseable {
      */
     public Builder withAddressResolver(AddressResolver addressResolver) {
       this.addressResolver = addressResolver;
+      this.explicitAddressResolver = addressResolver;
       return this;
     }
 
@@ -750,6 +757,12 @@ public final class Server implements AutoCloseable {
      * #withAddressResolver(AddressResolver)} overrides it; conversely, calling this method after
      * {@link #withAddressResolver(AddressResolver)} overrides a previously configured resolver.
      *
+     * <p>Using this with {@code false} restores whichever resolver was most recently configured via
+     * {@link #withAddressResolver(AddressResolver)} (or {@link AddressResolver#defaultResolver} if
+     * none was ever explicitly set), so the {@link NodePerPortResolver} installed by a prior {@code
+     * withMultipleNodesPerIp(true)} call doesn't linger once multiple-nodes-per-IP support is
+     * turned back off.
+     *
      * @param enabled Whether or not a node can be assigned to each port.
      * @return This builder.
      */
@@ -757,6 +770,11 @@ public final class Server implements AutoCloseable {
       this.multipleNodesPerIp = enabled;
       if (enabled) {
         this.addressResolver = new NodePerPortResolver();
+      } else {
+        this.addressResolver =
+            explicitAddressResolver != null
+                ? explicitAddressResolver
+                : AddressResolver.defaultResolver;
       }
       return this;
     }

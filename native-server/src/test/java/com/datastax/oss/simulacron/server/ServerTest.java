@@ -1244,4 +1244,53 @@ public class ServerTest {
     addressResolverField.setAccessible(true);
     assertThat(addressResolverField.get(builder)).isInstanceOf(NodePerPortResolver.class);
   }
+
+  @Test
+  public void testDisablingMultipleNodesPerIpDoesNotLeaveStaleNodePerPortResolver()
+      throws Exception {
+    // withMultipleNodesPerIp(true).withMultipleNodesPerIp(false), with no resolver ever
+    // explicitly configured, should leave the builder back at the true default resolver instead
+    // of a stale NodePerPortResolver -- otherwise a server built this way would end up allocating
+    // multiple ports per IP (via the resolver) while its PeerMetadataHandler is constructed with
+    // multipleNodesPerIp=false, which is inconsistent.
+    Server.Builder builder =
+        Server.builder().withMultipleNodesPerIp(true).withMultipleNodesPerIp(false);
+
+    Field addressResolverField = Server.Builder.class.getDeclaredField("addressResolver");
+    addressResolverField.setAccessible(true);
+    assertThat(addressResolverField.get(builder)).isEqualTo(AddressResolver.defaultResolver);
+  }
+
+  @Test
+  public void testDisablingMultipleNodesPerIpRestoresPreviouslyConfiguredAddressResolver()
+      throws Exception {
+    // withAddressResolver(custom).withMultipleNodesPerIp(true).withMultipleNodesPerIp(false)
+    // should end up using the explicitly-configured resolver again, not the NodePerPortResolver
+    // installed by the withMultipleNodesPerIp(true) call in between.
+    List<SocketAddress> generatedAddresses = new ArrayList<>();
+    AddressResolver customResolver =
+        () -> {
+          SocketAddress address = new LocalAddress("custom-" + generatedAddresses.size());
+          generatedAddresses.add(address);
+          return address;
+        };
+
+    try (Server server =
+        Server.builder()
+            .withEventLoopGroup(eventLoop, LocalServerChannel.class)
+            .withAddressResolver(customResolver)
+            .withMultipleNodesPerIp(true)
+            .withMultipleNodesPerIp(false)
+            .build()) {
+
+      NodeSpec node = NodeSpec.builder().build();
+      try (BoundNode boundNode = server.register(node)) {
+        // The address should have been produced by the custom resolver, not by the
+        // NodePerPortResolver that was installed (and should have been discarded again) while
+        // withMultipleNodesPerIp(true) was in effect.
+        assertThat(generatedAddresses).hasSize(1);
+        assertThat(boundNode.getAddress()).isEqualTo(generatedAddresses.get(0));
+      }
+    }
+  }
 }
