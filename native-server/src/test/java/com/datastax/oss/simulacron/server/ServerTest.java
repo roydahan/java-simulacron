@@ -62,9 +62,11 @@ import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.DefaultEventLoopGroup;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.local.LocalAddress;
 import io.netty.channel.local.LocalServerChannel;
 import io.netty.util.HashedWheelTimer;
 import io.netty.util.Timer;
+import java.lang.reflect.Field;
 import java.net.ConnectException;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
@@ -1185,5 +1187,61 @@ public class ServerTest {
         assertThat(defaultMappingResponse.message).isInstanceOf(Rows.class);
       }
     }
+  }
+
+  @Test
+  public void testMultipleNodesPerIpShouldNotOverrideAddressResolverConfiguredAfterwards()
+      throws Exception {
+    // A caller may configure withMultipleNodesPerIp(true) (e.g. for its peer metadata behavior)
+    // and still want to supply their own AddressResolver (e.g. a collision-safe one), as long as
+    // withAddressResolver(...) is called after withMultipleNodesPerIp(true). The resolver call
+    // should win, matching normal builder "last call wins" semantics and upstream behavior -- it
+    // must not be silently discarded in favor of a fresh NodePerPortResolver at build() time.
+    List<SocketAddress> generatedAddresses = new ArrayList<>();
+    AddressResolver customResolver =
+        () -> {
+          SocketAddress address = new LocalAddress("custom-" + generatedAddresses.size());
+          generatedAddresses.add(address);
+          return address;
+        };
+
+    try (Server server =
+        Server.builder()
+            .withEventLoopGroup(eventLoop, LocalServerChannel.class)
+            .withMultipleNodesPerIp(true)
+            .withAddressResolver(customResolver)
+            .build()) {
+
+      NodeSpec node = NodeSpec.builder().build();
+      try (BoundNode boundNode = server.register(node)) {
+        // The address should have been produced by the custom resolver, not by a
+        // NodePerPortResolver installed under the hood because of withMultipleNodesPerIp(true).
+        assertThat(generatedAddresses).hasSize(1);
+        assertThat(boundNode.getAddress()).isEqualTo(generatedAddresses.get(0));
+      }
+    }
+  }
+
+  @Test
+  public void testMultipleNodesPerIpShouldOverrideAddressResolverConfiguredBefore()
+      throws Exception {
+    // Conversely, if withMultipleNodesPerIp(true) is called after withAddressResolver(...), it
+    // should win, per normal builder "last call wins" semantics (matching upstream). This
+    // confirms withMultipleNodesPerIp(true) still installs a NodePerPortResolver by default.
+    List<SocketAddress> generatedAddresses = new ArrayList<>();
+    AddressResolver customResolver =
+        () -> {
+          SocketAddress address = new LocalAddress("custom-" + generatedAddresses.size());
+          generatedAddresses.add(address);
+          return address;
+        };
+
+    Server.Builder builder =
+        Server.builder().withAddressResolver(customResolver).withMultipleNodesPerIp(true);
+
+    // The custom resolver should have been replaced by a NodePerPortResolver.
+    Field addressResolverField = Server.Builder.class.getDeclaredField("addressResolver");
+    addressResolverField.setAccessible(true);
+    assertThat(addressResolverField.get(builder)).isInstanceOf(NodePerPortResolver.class);
   }
 }

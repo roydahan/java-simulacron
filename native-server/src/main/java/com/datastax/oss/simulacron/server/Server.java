@@ -744,17 +744,20 @@ public final class Server implements AutoCloseable {
     }
 
     /**
-     * Whether to support multiple nodes per IP (as per CASSANDRA-7544). When {@code true}, a fresh
-     * {@link NodePerPortResolver} is always allocated for this server instance at {@link #build()}
-     * time, regardless of the order in which builder methods are called. This means it will
-     * override any prior {@link #withAddressResolver(AddressResolver)} call, and any subsequent
-     * {@link #withAddressResolver(AddressResolver)} call will be overridden by this setting.
+     * Whether to support multiple nodes per IP (as per CASSANDRA-7544). Using this with {@code
+     * true} sets the address resolver to a fresh {@link NodePerPortResolver} at the time this
+     * method is called. As with any other builder setting, a subsequent call to {@link
+     * #withAddressResolver(AddressResolver)} overrides it; conversely, calling this method after
+     * {@link #withAddressResolver(AddressResolver)} overrides a previously configured resolver.
      *
      * @param enabled Whether or not a node can be assigned to each port.
      * @return This builder.
      */
     public Builder withMultipleNodesPerIp(boolean enabled) {
       this.multipleNodesPerIp = enabled;
+      if (enabled) {
+        this.addressResolver = new NodePerPortResolver();
+      }
       return this;
     }
 
@@ -834,9 +837,6 @@ public final class Server implements AutoCloseable {
         }
       }
       AddressResolver addressResolver = this.addressResolver;
-      if (multipleNodesPerIp) {
-        addressResolver = new NodePerPortResolver();
-      }
       return new Server(
           addressResolver,
           eventLoopGroup,
