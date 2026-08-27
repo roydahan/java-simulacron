@@ -643,10 +643,17 @@ public final class Server implements AutoCloseable {
   public static class Builder {
     private AddressResolver addressResolver = AddressResolver.defaultResolver;
 
-    // The resolver most recently set via withAddressResolver(...), if any. Tracked separately
-    // from addressResolver so that withMultipleNodesPerIp(false) can restore it (or fall back to
-    // the true default when the caller never set one) instead of leaving behind whatever resolver
-    // withMultipleNodesPerIp(true) had installed.
+    // The resolver most recently passed to withAddressResolver(...), or null if the caller has
+    // never called it. Tracked separately from the effective addressResolver above so that
+    // withMultipleNodesPerIp(boolean) can distinguish "the caller deliberately chose this
+    // resolver" from "this is just the default, or the NodePerPortResolver we auto-installed".
+    // That distinction is what lets an explicitly configured resolver win over the auto-installed
+    // NodePerPortResolver regardless of the order the two methods are called in, and it is what
+    // withMultipleNodesPerIp(false) restores (falling back to AddressResolver.defaultResolver when
+    // the caller never set one) rather than leaving a stale NodePerPortResolver behind.
+    //
+    // Invariant: addressResolver is always derived from these two fields, so every write to
+    // addressResolver must go through withAddressResolver(...) or withMultipleNodesPerIp(...).
     private AddressResolver explicitAddressResolver = null;
 
     private static final long DEFAULT_BIND_TIMEOUT_IN_NANOS =
@@ -686,6 +693,13 @@ public final class Server implements AutoCloseable {
     /**
      * Sets the address resolver to use when assigning {@link SocketAddress} to {@link NodeSpec}'s
      * that don't have previously provided addresses.
+     *
+     * <p>The most recent call to this method always wins: a resolver configured here takes
+     * precedence over the {@link NodePerPortResolver} that {@link #withMultipleNodesPerIp(boolean)}
+     * installs by default, regardless of the order in which the two methods are called, and it is
+     * also what {@code withMultipleNodesPerIp(false)} restores. Consequently, once this method has
+     * been called there is no way to get back to {@link AddressResolver#defaultResolver} or to an
+     * auto-installed {@link NodePerPortResolver} other than by passing one explicitly here.
      *
      * @param addressResolver resolver to use.
      * @return This builder.
