@@ -1223,11 +1223,14 @@ public class ServerTest {
   }
 
   @Test
-  public void testMultipleNodesPerIpShouldOverrideAddressResolverConfiguredBefore()
+  public void testMultipleNodesPerIpShouldNotOverrideAddressResolverConfiguredBefore()
       throws Exception {
-    // Conversely, if withMultipleNodesPerIp(true) is called after withAddressResolver(...), it
-    // should win, per normal builder "last call wins" semantics (matching upstream). This
-    // confirms withMultipleNodesPerIp(true) still installs a NodePerPortResolver by default.
+    // Conversely, if withMultipleNodesPerIp(true) is called after withAddressResolver(...), the
+    // explicitly configured resolver should still win -- an explicit resolver, once set, is never
+    // silently discarded by withMultipleNodesPerIp(true), regardless of call order. This mirrors
+    // testMultipleNodesPerIpShouldNotOverrideAddressResolverConfiguredAfterwards above: the
+    // outcome must be the same (the custom resolver wins) no matter which of the two methods is
+    // called first.
     List<SocketAddress> generatedAddresses = new ArrayList<>();
     AddressResolver customResolver =
         () -> {
@@ -1239,10 +1242,59 @@ public class ServerTest {
     Server.Builder builder =
         Server.builder().withAddressResolver(customResolver).withMultipleNodesPerIp(true);
 
-    // The custom resolver should have been replaced by a NodePerPortResolver.
+    // The custom resolver should still be in effect -- not a NodePerPortResolver.
     Field addressResolverField = Server.Builder.class.getDeclaredField("addressResolver");
     addressResolverField.setAccessible(true);
-    assertThat(addressResolverField.get(builder)).isInstanceOf(NodePerPortResolver.class);
+    assertThat(addressResolverField.get(builder)).isEqualTo(customResolver);
+  }
+
+  @Test
+  public void testBothOrderingsOfMultipleNodesPerIpAndAddressResolverConverge() throws Exception {
+    // The two orderings dkropachev flagged in review must converge on the same outcome: the
+    // explicitly configured resolver is used, and NodePerPortResolver never gets a chance to
+    // generate an address. Verified end-to-end via actual node registration, not just field
+    // inspection.
+    List<SocketAddress> addressesFromEnableThenResolver = new ArrayList<>();
+    AddressResolver resolverSetAfterEnabling =
+        () -> {
+          SocketAddress address =
+              new LocalAddress("after-enable-" + addressesFromEnableThenResolver.size());
+          addressesFromEnableThenResolver.add(address);
+          return address;
+        };
+
+    try (Server server =
+        Server.builder()
+            .withEventLoopGroup(eventLoop, LocalServerChannel.class)
+            .withMultipleNodesPerIp(true)
+            .withAddressResolver(resolverSetAfterEnabling)
+            .build()) {
+      try (BoundNode boundNode = server.register(NodeSpec.builder().build())) {
+        assertThat(addressesFromEnableThenResolver).hasSize(1);
+        assertThat(boundNode.getAddress()).isEqualTo(addressesFromEnableThenResolver.get(0));
+      }
+    }
+
+    List<SocketAddress> addressesFromResolverThenEnable = new ArrayList<>();
+    AddressResolver resolverSetBeforeEnabling =
+        () -> {
+          SocketAddress address =
+              new LocalAddress("before-enable-" + addressesFromResolverThenEnable.size());
+          addressesFromResolverThenEnable.add(address);
+          return address;
+        };
+
+    try (Server server =
+        Server.builder()
+            .withEventLoopGroup(eventLoop, LocalServerChannel.class)
+            .withAddressResolver(resolverSetBeforeEnabling)
+            .withMultipleNodesPerIp(true)
+            .build()) {
+      try (BoundNode boundNode = server.register(NodeSpec.builder().build())) {
+        assertThat(addressesFromResolverThenEnable).hasSize(1);
+        assertThat(boundNode.getAddress()).isEqualTo(addressesFromResolverThenEnable.get(0));
+      }
+    }
   }
 
   @Test

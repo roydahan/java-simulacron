@@ -752,10 +752,13 @@ public final class Server implements AutoCloseable {
 
     /**
      * Whether to support multiple nodes per IP (as per CASSANDRA-7544). Using this with {@code
-     * true} sets the address resolver to a fresh {@link NodePerPortResolver} at the time this
-     * method is called. As with any other builder setting, a subsequent call to {@link
-     * #withAddressResolver(AddressResolver)} overrides it; conversely, calling this method after
-     * {@link #withAddressResolver(AddressResolver)} overrides a previously configured resolver.
+     * true} sets the address resolver to a fresh {@link NodePerPortResolver}, unless an {@link
+     * AddressResolver} has already been explicitly configured via {@link
+     * #withAddressResolver(AddressResolver)} (whether before or after this call), in which case
+     * that explicit resolver is left alone -- an explicitly configured resolver always wins over
+     * the auto-installed {@link NodePerPortResolver}, so the outcome no longer depends on the
+     * order in which {@code withMultipleNodesPerIp(true)} and {@link
+     * #withAddressResolver(AddressResolver)} are called.
      *
      * <p>Using this with {@code false} restores whichever resolver was most recently configured via
      * {@link #withAddressResolver(AddressResolver)} (or {@link AddressResolver#defaultResolver} if
@@ -769,7 +772,9 @@ public final class Server implements AutoCloseable {
     public Builder withMultipleNodesPerIp(boolean enabled) {
       this.multipleNodesPerIp = enabled;
       if (enabled) {
-        this.addressResolver = new NodePerPortResolver();
+        if (explicitAddressResolver == null) {
+          this.addressResolver = new NodePerPortResolver();
+        }
       } else {
         this.addressResolver =
             explicitAddressResolver != null
